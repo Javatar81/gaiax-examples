@@ -1,0 +1,245 @@
+kind: Template
+apiVersion: template.openshift.io/v1
+metadata:
+  name: pumpdata-aggregator
+  namespace: openshift
+  labels:
+    samples.operator.openshift.io/managed: 'true'
+  annotations:
+    openshift.io/display-name: Pump Data Aggregator
+    openshift.io/documentation-url: 'https://docs.okd.io/latest/using_images/db_images/mongodb.html'
+    samples.operator.openshift.io/version: 4.2.14
+    tags: 'examples'
+    description: >-
+      ToDo
+
+
+      WARNING: Any data stored will be lost upon pod destruction. Only use this
+      template for testing
+    openshift.io/long-description: >-
+      This template provides a standalone MongoDB server with a database
+      created.  The database is not stored on persistent storage, so any restart
+      of the service will result in all data being lost.  The database name,
+      username, and password are chosen via parameters when provisioning this
+      service.
+    openshift.io/support-url: ''
+    iconClass: icon-mongodb
+    openshift.io/provider-display-name: 'Red Hat, Inc.'
+message: >-
+  The following service(s) have been created in your project:
+  ${DATABASE_SERVICE_NAME}.
+
+         Username: ${MONGODB_USER}
+         Password: ${MONGODB_PASSWORD}
+    Database Name: ${MONGODB_DATABASE}
+   Connection URL: mongodb://${MONGODB_USER}:${MONGODB_PASSWORD}@${DATABASE_SERVICE_NAME}/${MONGODB_DATABASE}
+
+  For more information about using this template, including OpenShift
+  considerations, see documentation in the upstream repository:
+  https://github.com/sclorg/mongodb-container.
+objects:
+  - apiVersion: v1
+    kind: Secret
+    metadata:
+      annotations:
+        template.openshift.io/expose-application.properties: '{.data[''application\\.properties'']}'
+      name: integration-secret
+    stringData:
+      application.properties: |
+        database-name=${MONGODB_DATABASE}
+        database-user=${MONGODB_USER}
+        database-password=${MONGODB_PASSWORD}
+        broker-url=${BROKER_URL}
+        topic=${TOPIC}
+  - apiVersion: camel.apache.org/v1
+    kind: Integration
+    metadata:
+      name: pump-data-aggregator
+    spec:
+      configuration:
+        - type: secret
+          value: integration-secret
+      dependencies:
+        - 'camel:undertow'
+        - 'camel:swagger-java'
+      sources:
+        - content: "package com.redhat.examples;\n/*\n * Licensed to the Apache Software Foundation (ASF) under one or more\n * contributor license agreements.  See the NOTICE file distributed with\n * this work for additional information regarding copyright ownership.\n * The ASF licenses this file to You under the Apache License, Version 2.0\n * (the \"License\"); you may not use this file except in compliance with\n * the License.  You may obtain a copy of the License at\n *\n *      http://www.apache.org/licenses/LICENSE-2.0\n *\n * Unless required by applicable law or agreed to in writing, software\n * distributed under the License is distributed on an \"AS IS\" BASIS,\n * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n * See the License for the specific language governing permissions and\n * limitations under the License.\n */\n\nimport java.math.BigDecimal;\nimport java.util.Arrays;\nimport java.util.Collection;\nimport java.util.Objects;\nimport java.util.stream.Collectors;\n\nimport org.apache.camel.Exchange;\nimport org.apache.camel.Processor;\nimport org.apache.camel.builder.RouteBuilder;\nimport org.apache.camel.component.dataset.SimpleDataSet;\nimport org.apache.camel.component.mongodb.MongoDbConstants;\nimport org.apache.camel.model.rest.RestBindingMode;\nimport org.bson.Document;\nimport org.slf4j.Logger;\nimport org.slf4j.LoggerFactory;\n\nimport com.mongodb.MongoClient;\nimport com.mongodb.MongoClientURI;\nimport com.mongodb.client.model.Sorts;\n\npublic class PumpDataAggregator extends RouteBuilder {\n\n\tprivate static final Logger LOGGER = LoggerFactory.getLogger(PumpDataAggregator.class);\n\t\n\tpublic static class PumpData {\n\t\tprivate final String source;\n\t\tprivate final String sensorName;\n\t\tprivate final BigDecimal value;\n\t\tprivate final long time;\n\n\t\tpublic PumpData(String source, String sensorName, BigDecimal value, long time) {\n\t\t\tsuper();\n\t\t\tthis.source = source;\n\t\t\tthis.sensorName = sensorName;\n\t\t\tthis.value = value;\n\t\t\tthis.time = time;\n\t\t}\n\n\t\tpublic String getSource() {\n\t\t\treturn source;\n\t\t}\n\n\t\tpublic String getSensorName() {\n\t\t\treturn sensorName;\n\t\t}\n\n\t\tpublic BigDecimal getValue() {\n\t\t\treturn value;\n\t\t}\n\n\t\tpublic long getTime() {\n\t\t\treturn time;\n\t\t}\n\n\t\t@Override\n\t\tpublic int hashCode() {\n\t\t\treturn Objects.hash(sensorName, source, time, value);\n\t\t}\n\n\t\t@Override\n\t\tpublic boolean equals(Object obj) {\n\t\t\tif (this == obj)\n\t\t\t\treturn true;\n\t\t\tif (obj == null)\n\t\t\t\treturn false;\n\t\t\tif (getClass() != obj.getClass())\n\t\t\t\treturn false;\n\t\t\tPumpData other = (PumpData) obj;\n\t\t\treturn Objects.equals(sensorName, other.sensorName) && Objects.equals(source, other.source)\n\t\t\t\t\t&& time == other.time && Objects.equals(value, other.value);\n\t\t}\n\n\t\t@Override\n\t\tpublic String toString() {\n\t\t\treturn String.format(\"PumpData [source=%s, sensorName=%s, value=%s, time=%s]\", source, sensorName, value,\n\t\t\t\t\ttime);\n\t\t}\n\n\t}\n\n\tpublic static class PumpDataTextProcessor implements Processor {\n\t\t\n\t\tprivate static final Logger LOGGER = LoggerFactory.getLogger(PumpDataTextProcessor.class);\n\t\t\n\t\t@Override\n\t\tpublic void process(Exchange exchange) throws Exception {\n\t\t\tString inputBody = exchange.getIn().getBody(String.class);\n\t\t\tPumpData pumpData = parse(inputBody);\n\t\t\tif (LOGGER.isDebugEnabled()) {\n\t\t\t\tLOGGER.debug(\"Processed input data: '{}'\", inputBody);\n\t\t\t\tLOGGER.debug(\"Converted into '{}'\", pumpData);\n\t\t\t}\n\t\t\texchange.getIn().setBody(pumpData);\n\t\t}\n\n\t\tprivate static PumpData parse(String text) {\n\t\t\tString[] tokens = text.split(\",\");\n\t\t\treturn new PumpData(tokens[0], tokens[1], new BigDecimal(tokens[2]), Long.parseLong(tokens[3]));\n\t\t}\n\t}\n\t\n\tpublic static class PumpDataDocumentProcessor implements Processor {\n\t\t\n\t\tprivate static final Logger LOGGER = LoggerFactory.getLogger(PumpDataDocumentProcessor.class);\n\t\t\n\t\t@Override\n\t\tpublic void process(Exchange exchange) throws Exception {\n\t\t\tDocument[] document = exchange.getIn().getBody(Document[].class);\n\t\t\tCollection<PumpData> pumpData = parse(document);\n\t\t\tif (LOGGER.isDebugEnabled()) {\n\t\t\t\tLOGGER.debug(\"Processed input data: '{}'\", Arrays.asList(document));\n\t\t\t\tLOGGER.debug(\"Converted into '{}'\", pumpData);\n\t\t\t}\n\t\t\t\n\t\t\texchange.getIn().setBody(pumpData);\n\t\t}\n\t\t\n\t\tprivate static Collection<PumpData> parse(Document[] doc) {\n\t\t\treturn Arrays.stream(doc).map(PumpDataDocumentProcessor::parse).collect(Collectors.toList());\n\n\t\t}\n\t\t\n\t\tprivate static PumpData parse(Document doc) {\n\t\t\treturn new PumpData(doc.getString(\"source\"), doc.getString(\"sensorName\"), new BigDecimal(doc.getDouble(\"value\")), doc.getLong(\"time\"));\n\t\t}\n\t\t\n\t}\n\n\t@Override\n\tpublic void configure() throws Exception {\n\t\tbindToRegistry();\n\t\tLOGGER.debug(\"binding complete\");\n\t\tconfigureRest();\n\t\tLOGGER.debug(\"rest configured\");\n\t\tfromMqttToMongoDb();\n\t\tLOGGER.debug(\"mqtt route enabled\");\n\t\tfromMongoDbToRest();\n\t\tLOGGER.debug(\"rest endpoint enabled\");\n\t\tLOGGER.debug(\"route initialization completed\");\n\t}\n\n\tprivate void bindToRegistry() throws Exception {\n\t\tString uriStr = String.format(\"mongodb://%s:%s@mongodb:27017/%s\", propertyInject(\"database-user\", String.class), propertyInject(\"database-password\", String.class), propertyInject(\"database-name\", String.class));\n\t\tMongoClient mongoClient = new MongoClient(new MongoClientURI(uriStr));\n\t\tbindToRegistry(\"myDb\", mongoClient);\n\t\tSimpleDataSet simpleDataSet = new SimpleDataSet();\n\t\tbindToRegistry(\"data\", simpleDataSet);\n\t}\n\n\tprivate void configureRest() {\n\t\trestConfiguration().component(\"undertow\").bindingMode(RestBindingMode.json)\n        \t.dataFormatProperty(\"prettyPrint\", \"true\")\n        \t.contextPath(\"/\").port(8080)\n        \t.apiContextPath(\"/api-doc\")\n            .apiProperty(\"api.title\", \"User API\").apiProperty(\"api.version\", \"1.0.0\");\n\t}\n\n\tprivate void fromMongoDbToRest() {\n\t\tfrom(\"direct:find20\")\n\t\t\t.setHeader(MongoDbConstants.LIMIT).constant(20)\n\t\t\t.setHeader(MongoDbConstants.SORT_BY).constant(Sorts.descending(\"time\"))\n\t\t\t.to(\"mongodb:myDb?database={{database-name}}&collection=temperature&operation=findAll\")\n\t\t\t.process(new PumpDataDocumentProcessor());\n\t\t rest(\"/api\").bindingMode(RestBindingMode.json)\n\t\t \t.get(\"/pump\")\n\t\t \t\t.description(\"Retrieves the last 20 pump data entries\")\n\t\t \t\t//.type(PumpDataAggregator.PumpData.class)\n\t\t \t\t.to(\"direct:find20\");\n\t}\n\n\tprivate void fromMqttToMongoDb() {\n\t\tfrom(\"paho:{{topic}}?brokerUrl={{broker-url}}\")\n\t\t\t\t.process(new PumpDataTextProcessor())\n\t\t\t\t.log(\"Hello:\" + body().toString()).to(\"dataset:data\")\n\t\t\t\t.to(\"direct:insert\");\n\t\tfrom(\"direct:insert\").to(\"mongodb:myDb?database={{database-name}}&collection=temperature&operation=save\");\n\t}\n}"
+          name: PumpDataAggregator.java
+  - apiVersion: v1
+    kind: Secret
+    metadata:
+      annotations:
+        template.openshift.io/expose-admin_password: '{.data[''database-admin-password'']}'
+        template.openshift.io/expose-database_name: '{.data[''database-name'']}'
+        template.openshift.io/expose-password: '{.data[''database-password'']}'
+        template.openshift.io/expose-username: '{.data[''database-user'']}'
+      name: '${DATABASE_SERVICE_NAME}'
+    stringData:
+      database-admin-password: '${MONGODB_ADMIN_PASSWORD}'
+      database-name: '${MONGODB_DATABASE}'
+      database-password: '${MONGODB_PASSWORD}'
+      database-user: '${MONGODB_USER}'
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      annotations:
+        template.openshift.io/expose-uri: 'mongodb://{.spec.clusterIP}:{.spec.ports[?(.name=="mongo")].port}'
+      name: '${DATABASE_SERVICE_NAME}'
+    spec:
+      ports:
+        - name: mongo
+          nodePort: 0
+          port: 27017
+          protocol: TCP
+          targetPort: 27017
+      selector:
+        name: '${DATABASE_SERVICE_NAME}'
+      sessionAffinity: None
+      type: ClusterIP
+    status:
+      loadBalancer: {}
+  - apiVersion: v1
+    kind: DeploymentConfig
+    metadata:
+      annotations:
+        template.alpha.openshift.io/wait-for-ready: 'true'
+      name: '${DATABASE_SERVICE_NAME}'
+    spec:
+      replicas: 1
+      selector:
+        name: '${DATABASE_SERVICE_NAME}'
+      strategy:
+        type: Recreate
+      template:
+        metadata:
+          labels:
+            name: '${DATABASE_SERVICE_NAME}'
+        spec:
+          containers:
+            - resources:
+                limits:
+                  memory: '${MEMORY_LIMIT}'
+              readinessProbe:
+                exec:
+                  command:
+                    - /bin/sh
+                    - '-i'
+                    - '-c'
+                    - >-
+                      mongo 127.0.0.1:27017/$MONGODB_DATABASE -u $MONGODB_USER
+                      -p $MONGODB_PASSWORD --eval="quit()"
+                initialDelaySeconds: 3
+                timeoutSeconds: 1
+              terminationMessagePath: /dev/termination-log
+              name: mongodb
+              livenessProbe:
+                initialDelaySeconds: 30
+                tcpSocket:
+                  port: 27017
+                timeoutSeconds: 1
+              env:
+                - name: MONGODB_USER
+                  valueFrom:
+                    secretKeyRef:
+                      key: database-user
+                      name: '${DATABASE_SERVICE_NAME}'
+                - name: MONGODB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      key: database-password
+                      name: '${DATABASE_SERVICE_NAME}'
+                - name: MONGODB_ADMIN_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      key: database-admin-password
+                      name: '${DATABASE_SERVICE_NAME}'
+                - name: MONGODB_DATABASE
+                  valueFrom:
+                    secretKeyRef:
+                      key: database-name
+                      name: '${DATABASE_SERVICE_NAME}'
+              securityContext:
+                capabilities: {}
+                privileged: false
+              ports:
+                - containerPort: 27017
+                  protocol: TCP
+              imagePullPolicy: IfNotPresent
+              volumeMounts:
+                - mountPath: /var/lib/mongodb/data
+                  name: '${DATABASE_SERVICE_NAME}-data'
+              capabilities: {}
+              image: ' '
+          dnsPolicy: ClusterFirst
+          restartPolicy: Always
+          volumes:
+            - emptyDir:
+                medium: ''
+              name: '${DATABASE_SERVICE_NAME}-data'
+      triggers:
+        - imageChangeParams:
+            automatic: true
+            containerNames:
+              - mongodb
+            from:
+              kind: ImageStreamTag
+              name: 'mongodb:${MONGODB_VERSION}'
+              namespace: '${NAMESPACE}'
+            lastTriggeredImage: ''
+          type: ImageChange
+        - type: ConfigChange
+parameters:
+  - name: BROKER_URL
+    displayName: Mqtt Broker Url
+    description: Url of the Mqtt Broker
+    value: ws://<broker_url>
+    required: true
+  - name: TOPIC
+    displayName: Topic name
+    description: Topic name
+    value: iot-sensor/sw/temperature
+    required: true
+  - name: MEMORY_LIMIT
+    displayName: Memory Limit
+    description: Maximum amount of memory the container can use.
+    value: 512Mi
+    required: true
+  - name: NAMESPACE
+    displayName: Namespace
+    description: The OpenShift Namespace where the ImageStream resides.
+    value: openshift
+  - name: DATABASE_SERVICE_NAME
+    displayName: Database Service Name
+    description: The name of the OpenShift Service exposed for the database.
+    value: mongodb
+    required: true
+  - name: MONGODB_USER
+    displayName: MongoDB Connection Username
+    description: Username for MongoDB user that will be used for accessing the database.
+    generate: expression
+    from: 'user[A-Z0-9]{3}'
+    required: true
+  - name: MONGODB_PASSWORD
+    displayName: MongoDB Connection Password
+    description: Password for the MongoDB connection user.
+    generate: expression
+    from: '[a-zA-Z0-9]{16}'
+    required: true
+  - name: MONGODB_DATABASE
+    displayName: MongoDB Database Name
+    description: Name of the MongoDB database accessed.
+    value: sampledb
+    required: true
+  - name: MONGODB_ADMIN_PASSWORD
+    displayName: MongoDB Admin Password
+    description: Password for the database admin user.
+    generate: expression
+    from: '[a-zA-Z0-9]{16}'
+    required: true
+  - name: MONGODB_VERSION
+    displayName: Version of MongoDB Image
+    description: Version of MongoDB image to be used (3.6 or latest).
+    value: '3.6'
+    required: true
+labels:
+  template: pumpdata-aggregator-template

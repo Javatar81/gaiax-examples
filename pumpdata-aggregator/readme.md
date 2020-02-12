@@ -1,4 +1,4 @@
-#Installation
+# Installation
 
 1. Run command `oc apply -f deploy/template.yaml`. Please note that this template is based on the [MongoDB Ephemeral Template](https://github.com/sclorg/mongodb-container/blob/master/examples/mongodb-ephemeral-template.json).
 2. Go to service catalog and search for "pump".
@@ -6,7 +6,7 @@
 4. Send a Http Get request to the endpoint [http://pump-data-aggregator-project.basedomain/api-doc](http://pump-data-aggregator-project.basedomain/api-doc) to retrieve the swagger docs. Make sure to replace project and basedomain accordingly.
 5. Send a Http Get request to the endpoint [http://pump-data-aggregator-project.basedomain/api/pump](http://pump-data-aggregator-project.basedomain/api/pump) to get a list of the 20 most recent pump data records. Make sure to replace project and basedomain accordingly.
 
-#Development
+# Development
 
 To run the integration code in Java class PumpDataAggregator with live-reload use kamel cli with the following parameters:
 

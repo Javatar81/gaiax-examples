@@ -3,8 +3,8 @@
 1. Run command `oc apply -f deploy/template.yaml`. Please note that this template is based on the [MongoDB Ephemeral Template](https://github.com/sclorg/mongodb-container/blob/master/examples/mongodb-ephemeral-template.json).
 2. Go to service catalog and search for "pump".
 3. Select Pump Data Aggregator and click on Instantiate Template. Make sure to insert the respective broker url.
-4. Send a Http Get request to the endpoint http://pump-data-aggregator-<project-name>.<basedomain>/api-doc to retrieve the swagger docs.
-5. Send a Http Get request to the endpoint http://pump-data-aggregator-<project-name>.<basedomain>/api/pump to get a list of the 20 most recent pump data records.
+4. Send a Http Get request to the endpoint http://pump-data-aggregator-&lt;project-name&gt;.&lt;basedomain&gt;/api-doc to retrieve the swagger docs.
+5. Send a Http Get request to the endpoint http://pump-data-aggregator-&lt;project-name&gt;.&lt;basedomain&gt;/api/pump to get a list of the 20 most recent pump data records.
 
 #Development
 
